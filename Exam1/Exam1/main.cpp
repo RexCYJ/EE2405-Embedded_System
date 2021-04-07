@@ -2,6 +2,7 @@
 #include "uLCD_4DGL.h"
 
 #define SAMPLES_PER_PERIOD  1000
+#define DEBOUNCE_PERIOD     600
 
 using namespace std::chrono;
 
@@ -19,6 +20,8 @@ uLCD_4DGL uLCD(D1, D0, D2);             // uLCD ports
 
 Thread Output(osPriorityHigh);              // (High prior) generate output wave in this thread
 Thread Input(osPriorityHigh2);              // (Higher prior) receive input wave, and change cursor in this thread
+EventQueue queue(32 * EVENTS_EVENT_SIZE);   // arrange tasks to generate wave
+EventQueue sample(32 * EVENTS_EVENT_SIZE);  // tasks handling cursor-moving, wave-receiving
 
 int usrrate[4] = {8, 4, 2, 1};      // the freq we want to perform
 int usrStep[4] = {80, 40, 20, 10};
@@ -47,7 +50,7 @@ int main()
     Main_init();
     Output.start(callback(&queue, &EventQueue::dispatch_forever));
     Input.start(callback(&sample, &EventQueue::dispatch_forever));
-    queue.call_every(1ms, Wavegen);
+    queue.call_every(240ms, Wavegen);
     while (1) {}
 }
 
@@ -69,19 +72,19 @@ void Main_init()
     uLCD.color(0xF0F000);
     uLCD.text_width(2); uLCD.text_height(2);
     uLCD.locate(2, 2);
-    uLCD.printf("1/8 Hz");
+    uLCD.printf("1");
     uLCD.locate(2, 3);
-    uLCD.printf("1/4 Hz");
+    uLCD.printf("1/2");
     uLCD.locate(2, 4);
-    uLCD.printf("1/2 Hz");
+    uLCD.printf("1/4");
     uLCD.locate(2, 5);
-    uLCD.printf("1   Hz");
+    uLCD.printf("1/8");
     uLCD.color(0xFF0000);
     uLCD.locate(0, 2+uLCDcursor);
     uLCD.printf(">");
 
     curStep = usrStep[0];
-    vouticrm = (3.0f / 3.3f) / ((SAMPLES_PER_PERIOD / usrStep) - 1);
+    vouticrm = Vmax / (usrStep[uLCDcursor] - 1);
 }
 
 void MenuCursor()
@@ -107,7 +110,7 @@ void Button_up()
         DBG2 = !DBG2;
         if (uLCDcursor > 0) uLCDcursor -= 1;
         curStep = usrStep[uLCDcursor];                 // change current freq
-        vouticrm = (Vmax) / ((SAMPLES_PER_PERIOD / curStep) - 1);
+        vouticrm = (Vmax) / (usrStep[uLCDcursor] - 1);
         sample.call(MenuCursor);
     }
 }
@@ -119,7 +122,7 @@ void Button_down()
         DBG1 = !DBG1;
         if (uLCDcursor < 3) uLCDcursor += 1;
         curStep = usrStep[uLCDcursor];                 // change current freq
-        vouticrm = Vmax / ((SAMPLES_PER_PERIOD / curStep) - 1);
+        vouticrm = Vmax / (usrStep[uLCDcursor] - 1);
         sample.call(MenuCursor);
     }
 }
