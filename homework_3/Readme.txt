@@ -31,3 +31,5 @@ Description:
     超過既定數量的回傳，會再傳RPC指令給mbed使其結束目前thread內的
     程式，回到原本的RPC loop。
 
+Results:
+    Please take a look of the demo video.
