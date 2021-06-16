@@ -7,10 +7,10 @@
 #define SCREEN_DISTORTION_RATIO 0.714
 #define SCREEN_Y_CORRECTION     7
 #define SCREEN_REFERENCE_Y      8
-#define RUNTIME                 20ms
+#define RUNTIME                 50ms
 // #define ROTATE_RUNTIME          200ms
 
-using namespace std::chrono;
+// using namespace std::chrono;
 
 // UART Connection
 BufferedSerial OpenMV(D1,D0);       // tx,rx
@@ -18,14 +18,17 @@ BufferedSerial Xbee(D10,D9);        // tx,rx
 BufferedSerial pc(USBTX, USBRX);        // tx,rx
 
 // Boe Bot Car Setting
-Thread RunThread(osPriorityHigh);               // For lineDetection
-EventQueue MoveEvent(32 * EVENTS_EVENT_SIZE);   // EventQueue fro RunThread
+// Thread RunThread(osPriorityHigh);               // For lineDetection
+Thread OpenMVRPC(osPriorityHigh);
+// EventQueue MoveEvent(32 * EVENTS_EVENT_SIZE);   // EventQueue fro RunThread
+EventQueue OpenMvEvent(32 * EVENTS_EVENT_SIZE);
 Ticker servo_ticker;                            // Call parallax_servo::control() every 5ms
 PwmOut pin5(D5), pin6(D6);                      // D5: Left servo, D6: Right servo
 BBCar car(pin5, pin6, servo_ticker);
 
 // Debug
 DigitalOut my_led1(LED3);
+DigitalOut my_led2(LED2);
 
 // RPC call function
 void LineDetect();
@@ -33,8 +36,18 @@ void Drive();
 void OperateLoop();
 void Track_stop(Arguments *in, Reply *out);
 void Track(Arguments *in, Reply *out);
+
+void TrackRPCLoop();
+
+void carStop(Arguments *in, Reply *out);
+void carTurn(Arguments *in, Reply *out);
+void carStraight(Arguments *in, Reply *out);
+RPCFunction rpcCarStop(&carStop, "stop");
+RPCFunction rpcCarStraight(&carStraight, "straight");
+RPCFunction rpcCarTurn(&carTurn, "turn");
+
 RPCFunction rpcTrack(&Track, "track");
-RPCFunction rpcTrackStop(&Track_stop, "stop");
+// RPCFunction rpcTrackStop(&Track_stop, "stop");
 
 // Global Variable
 volatile int Track_State;
@@ -43,6 +56,8 @@ volatile double X1, Y1, X2, Y2;
 
 FILE *devin  = fdopen(&Xbee, "r");
 FILE *devout = fdopen(&Xbee, "w");
+FILE *OMin  = fdopen(&OpenMV, "r");
+FILE *OMout = fdopen(&OpenMV, "w");
 
 //////////////////////// Main Function ////////////////////////////////////////////////////
 int main(void)
@@ -56,7 +71,8 @@ int main(void)
     car.stop();
 
     Track_State = 0;
-    RunThread.start(callback(&MoveEvent, &EventQueue::dispatch_forever));
+    // RunThread.start(callback(&MoveEvent, &EventQueue::dispatch_forever));
+    OpenMVRPC.start(callback(&OpenMvEvent, &EventQueue::dispatch_forever));
     
     while (1) {
         my_led1 = 1;
@@ -64,38 +80,89 @@ int main(void)
         for( int i = 0; ; i++ ) {
             char recv = fgetc(devin);
             if(recv == '\n') {
-                printf("\r\n");
                 break;
             }
-            buf[i] = fputc(recv, devout);
+            buf[i] = recv;
         }
         RPC::call(buf, outbuf);
     }
-
-}
-
-////////////////////////// Called by Xbee ////////////////////////////////
-void Track_stop(Arguments *in, Reply *out)
-{
-    Track_State = 0;
-    // MoveEvent.cancel(EventID_move);
-    // MoveEvent.cancel(EventID_line);
 }
 
 ////////////////////////// Called by Xbee ////////////////////////////////
 void Track(Arguments *in, Reply *out)
 {
     Track_State = 1;
-    EventID_Loop = MoveEvent.call(&OperateLoop);
+    OpenMvEvent.call(&TrackRPCLoop);
 }
 
+void TrackRPCLoop()
+{
+    // if (Track_State == 0) break;
+    ThisThread::sleep_for(2s);
+    char buf[256], outbuf[256];
+    while (1) {
+        memset(buf, 0, 256);
+        for( int i = 0; ; i++ ) {
+            char recv = fgetc(OMin);
+            if(recv == '\n') {
+                break;
+            }
+            buf[i] = recv;
+        }
+        RPC::call(buf, outbuf);
+        // if (Track_State == 0) break;
+    }
+}
+
+void carStop(Arguments *in, Reply *out)
+{
+    my_led1 = 1;
+    car.stop();
+    ThisThread::sleep_for(50ms);
+    my_led1 = 0;
+}
+
+void carTurn(Arguments *in, Reply *out)
+{
+    my_led1 = 1;
+    double speed, rfactor, lfactor;
+    
+    speed = in->getArg<double>();
+    rfactor = in->getArg<double>();
+    lfactor = in->getArg<double>();
+
+    car.turn(-speed, rfactor, lfactor);       // turn right
+    ThisThread::sleep_for(50ms);
+    my_led1 = 0;
+}
+
+void carStraight(Arguments *in, Reply *out)
+{
+    my_led1 = 1;
+    double speed;
+    speed = in->getArg<double>();
+    car.goStraight(-speed);       // turn right
+    ThisThread::sleep_for(50ms);
+    my_led1 = 0;
+}
+
+/*
 void OperateLoop()
 {
     printf("StartLoop\r\n");
     ThisThread::sleep_for(2s);
+    double x1, x2, y1, y2;
     while (Track_State) {
         // ThisThread::sleep_for(30ms);
         LineDetect();
+        x1 = X1; x2 = X2; y1 = Y1; y2 = Y2;
+        ThisThread::sleep_for(30ms);
+        LineDetect();
+        x1 += X1; x2 += X2; y1 += Y1; y2 += Y2;
+        // ThisThread::sleep_for(20ms);
+        // LineDetect();
+        // x1 += X1; x2 += X2; y1 += Y1; y2 += Y2;
+        X1 = x1/2; X2 = x2/2; Y1 = y1/2; Y2 = y2/2;
         Drive();
     }
 }
@@ -132,6 +199,7 @@ void LineDetect()
         printf("BUF:  %d %d %d %d\r\n", buf[0], buf[1], buf[2], buf[3]);
         if (buf[0] >= 0 && buf[0] <= 160 && buf[1] >= 0 && buf[1] <= 160 && buf[2] >= 0 && buf[2] <= 120 && buf[3] >= 0 && buf[3] <= 120)
             break;
+        // else car.Setspeed(30);
     }
     
     my_led1 = 1;
@@ -153,17 +221,17 @@ void Drive()
     if (Track_State == 0)
         return;
 
-    int side_coef = 3;
-    int side_rotate = 0.8;
-    int speed = 60;
+    double side_coef = 4;
+    double side_rotate = 0.8;
+    double speed = 50;
     double x_center, y_center;
     double x_vector, y_vector;
     double x1, x2, y1, y2;
     double theta;
     double STRAIGHT_ANGLE_RANGE = 20;
     double STRAIGHT_CENTER_REGION = 55;
-    double ROTATE_RUNTIME = 1;
-    double ANGLE_COEF = 0.5;
+    double ROTATE_RUNTIME = 2;
+    double ANGLE_COEF = 0.2;
     double y0crossing;
 
     // if (Y1 > Y2) X1 
@@ -189,7 +257,7 @@ void Drive()
     if ((y0crossing > 60 && y0crossing < 300) || (fabs(x1) < 40 && fabs(x2) < 40)) {
         if (fabs(x_center) < 30) {
             car.goStraight(-speed);
-            ThisThread::sleep_for(RUNTIME);
+            ThisThread::sleep_for(200ms);
         } else if (x_center > 0) {           // align right side
             car.turn(-speed, side_rotate, 1);       // turn right
             ThisThread::sleep_for(chrono::milliseconds(int(fabs(x_center) * side_coef * 2)));
@@ -204,16 +272,16 @@ void Drive()
     // } else if (th) {
 
     } else if (theta > -15 && x_center > 0) {             // turn right
-        car.turn(-speed, 0.7, 1);        
-        ThisThread::sleep_for(chrono::milliseconds(int(fabs(theta) * ANGLE_COEF)));   
-        // car.stop();
+        car.turn(-speed, 0.3f, 1);        
+        ThisThread::sleep_for(200ms);   
+        car.stop();
     } else if (theta < 15 && x_center < 0) {
-        car.turn(-speed, 0.8, 0.6);         // turn left
-        ThisThread::sleep_for(chrono::milliseconds(int(fabs(theta) * ANGLE_COEF)));   
-        // car.stop();
+        car.turn(-speed, 1, 0.3f);         // turn left
+        ThisThread::sleep_for(200ms);   
+        car.stop();
     } else {
-        car.Setspeed(40);
-        ThisThread::sleep_for(50ms);
+        car.Setspeed(-30);
+        ThisThread::sleep_for(20ms);
         // car.stop();
     }
 
@@ -259,3 +327,4 @@ void Drive()
     // }
     my_led1 = 1;
 }
+*/
