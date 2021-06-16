@@ -82,8 +82,11 @@ void SelfParking(double d1, double d2, double dir)
 {
     my_led1 = 0;
     double rotate_coef = 12;
-    double straight_coef = 90;
+    double straight_coef = 100;
+    double straight_coef2 = 120;
     double speed = 0;
+
+    ThisThread::sleep_for(2s);
 
     // correct the angle
     if (dir) {
@@ -98,21 +101,22 @@ void SelfParking(double d1, double d2, double dir)
     if (d2 > 0) speed = -50;
     else if (d2 < 0) speed = 50;
     car.goStraight(speed);              // go
-    ThisThread::sleep_for(chrono::milliseconds(int((d2 + 8) * straight_coef)));
+    ThisThread::sleep_for(chrono::milliseconds(int((d2 + 11) * straight_coef)));
     car.stop();
 
     ThisThread::sleep_for(1s);
 
     // rotate 90 degree
-    car.turn(50, -1, dir);
-    ThisThread::sleep_for(chrono::milliseconds(int(90 * rotate_coef)));
+    if (dir == 0) dir = 1;
+    car.turn(60, -1, dir);
+    ThisThread::sleep_for(chrono::milliseconds(int(95 * rotate_coef)));
     car.stop();
 
     ThisThread::sleep_for(1s);
 
     // go into the garage
     car.goStraight(-50);
-    ThisThread::sleep_for(chrono::milliseconds(int((d1+15) * straight_coef)));
+    ThisThread::sleep_for(chrono::milliseconds(int((d1+15) * straight_coef2)));
     car.stop();
     printf("End\n");
 }
